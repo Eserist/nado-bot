@@ -341,9 +341,7 @@ def main():
     print(f"  Entry:    {MIN_SIG}/7 Indikatoren")
     modus = f"{Y}DRY RUN{X}" if DRY_RUN else f"{R}{B}LIVE TRADING{X}"
     print(f"  Modus:    {modus}\n")
-    if not DRY_RUN:
-        if input(f"  {R}{B}LIVE starten? (ja/nein): {X}").strip().lower() != "ja":
-            print("  Abgebrochen."); return
+    
     loop()
 
 
