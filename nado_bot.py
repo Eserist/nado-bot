@@ -235,7 +235,7 @@ def close_pos(grund, preis):
     global pos, wins, loss, cool
     if not pos: return
     is_buy = pos["dir"] != "LONG"
-    ok = place_order(is_buy, preis, reduce_only=True)
+    ok = place_order(is_buy, preis, reduce_only=False)
     if not ok and not DRY_RUN:
         log("⚠️ Close fehlgeschlagen — Position bleibt offen! Manuell schließen!", R)
         return
