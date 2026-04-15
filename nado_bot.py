@@ -237,7 +237,9 @@ def close_pos(grund, preis):
     is_buy = pos["dir"] != "LONG"
     ok = place_order(is_buy, preis, reduce_only=False)
     if not ok and not DRY_RUN:
-        log("⚠️ Close fehlgeschlagen — Position bleibt offen! Manuell schließen!", R)
+        log("⚠️ Close fehlgeschlagen — Position wird zurückgesetzt!", R)
+        pos = None
+        cool = COOLDOWN
         return
     pnl = (preis-pos["entry"])/pos["entry"]*100 if pos["dir"]=="LONG" else (pos["entry"]-preis)/pos["entry"]*100
     if pnl > 0: wins += 1
