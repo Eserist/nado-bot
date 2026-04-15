@@ -43,9 +43,9 @@ ARCHIVE     = "https://archive.prod.nado.xyz/v1"
 HEADERS     = {"Accept-Encoding": "gzip", "Content-Type": "application/json"}
 
 ORDER_SIZE  = 0.0015   # BTC
-TAKE_PROFIT = 1.5      # %
-STOP_LOSS   = 0.5      # %
-TRAIL_PCT   = 0.3      # % Trailing Stop
+TAKE_PROFIT = 2.0      # %
+STOP_LOSS   = 0.8      # %
+TRAIL_PCT   = 1.0      # % Trailing Stop
 COOLDOWN    = 3        # Ticks warten nach Close
 
 RSI_LOW     = 35
