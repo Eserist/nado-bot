@@ -36,10 +36,10 @@ GATEWAY     = "https://gateway.prod.nado.xyz/v1"
 ARCHIVE     = "https://archive.prod.nado.xyz/v1"
 HEADERS     = {"Accept-Encoding": "gzip", "Content-Type": "application/json"}
 
-ORDER_SIZE  = 0.0015
-TAKE_PROFIT = 2.0
+ORDER_SIZE  = 0.0017
+TAKE_PROFIT = 1.5
 STOP_LOSS   = 0.8
-TRAIL_PCT   = 1.0
+TRAIL_PCT   = 0.8
 COOLDOWN    = 3
 
 RSI_LOW     = 35
