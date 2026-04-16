@@ -39,7 +39,7 @@ HEADERS     = {"Accept-Encoding": "gzip", "Content-Type": "application/json"}
 ORDER_SIZE  = 0.0017
 TAKE_PROFIT = 1.5
 STOP_LOSS   = 0.8
-TRAIL_PCT   = 0.8
+TRAIL_PCT   = 0.5
 COOLDOWN    = 3
 
 RSI_LOW     = 35
