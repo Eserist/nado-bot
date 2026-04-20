@@ -1,11 +1,11 @@
 """
-Nado.xyz Trading Bot
-=====================
-- State wird gespeichert (überlebt Neustarts)
+Nado.xyz Trading Bot — Multi-Timeframe
+========================================
+- 1H Kerzen für Trend-Filter (nie gegen den Trend)
+- 5-Min Kerzen für Einstieg
 - Trailing Stop + TP/SL
-- Kein sofortiger Umkehr-Trade nach Close
+- State wird gespeichert (überlebt Neustarts)
 - Limit Orders (0.1% Slippage)
-- RSI + EMA + MACD auf 5-Min Kerzen
 
 Einrichten:
     1. WALLET_ADDR = deine Wallet Adresse
@@ -36,16 +36,15 @@ GATEWAY     = "https://gateway.prod.nado.xyz/v1"
 ARCHIVE     = "https://archive.prod.nado.xyz/v1"
 HEADERS     = {"Accept-Encoding": "gzip", "Content-Type": "application/json"}
 
-ORDER_SIZE  = 0.0017
-TAKE_PROFIT = 1.0
-STOP_LOSS   = 0.5
-TRAIL_PCT   = 0.5
+ORDER_SIZE  = 0.0015
+TAKE_PROFIT = 2.0
+STOP_LOSS   = 0.8
+TRAIL_PCT   = 1.0
 COOLDOWN    = 3
 
 RSI_LOW     = 35
 RSI_HIGH    = 65
 MIN_SIG     = 4
-MIN_CANDLES = 50
 INTERVAL    = 30
 DRY_RUN     = False
 STATE_FILE  = "state.json"
@@ -63,7 +62,7 @@ def fmt(x):
     except: return "?"
 
 
-# ─── STATE SPEICHERN / LADEN ──────────────────────────────
+# ─── STATE ────────────────────────────────────────────────
 
 def save_state():
     try:
@@ -75,27 +74,26 @@ def load_state():
     global pos, trades, wins, loss, cool
     try:
         if os.path.exists(STATE_FILE):
-            d = json.load(open(STATE_FILE))
+            d      = json.load(open(STATE_FILE))
             pos    = d.get("pos")
             trades = d.get("trades", 0)
             wins   = d.get("wins", 0)
             loss   = d.get("loss", 0)
             cool   = d.get("cool", 0)
-            if pos:
-                log(f"State geladen: {pos['dir']} @ {fmt(pos['entry'])}", Y)
-            else:
-                log("State geladen: keine offene Position", C)
+            if pos: log(f"State geladen: {pos['dir']} @ {fmt(pos['entry'])}", Y)
+            else:   log(f"State geladen: kein offener Trade | {trades}T {wins}W {loss}L", C)
     except Exception as e:
-        log(f"State laden Fehler: {e}", Y)
+        log(f"State Fehler: {e}", Y)
 
 
 # ─── API ──────────────────────────────────────────────────
 
-def get_candles():
+def get_kerzen(granularity, limit):
+    """Holt Kerzen — granularity: 300=5Min, 3600=1H"""
     try:
         r = requests.post(
             ARCHIVE,
-            json={"candlesticks": {"product_id": PRODUCT_ID, "granularity": 300, "limit": 100}},
+            json={"candlesticks": {"product_id": PRODUCT_ID, "granularity": granularity, "limit": limit}},
             headers=HEADERS, timeout=15, verify=False
         )
         if r.status_code != 200: return None
@@ -104,7 +102,7 @@ def get_candles():
                  "l": float(c.get("low_x18",0))/1e18,  "c": float(c.get("close_x18",0))/1e18}
                 for c in cs] if cs else None
     except Exception as e:
-        log(f"Kerzen Fehler: {e}", Y); return None
+        log(f"Kerzen Fehler ({granularity}s): {e}", Y); return None
 
 def get_preis():
     try:
@@ -148,29 +146,51 @@ def calc_macd(c):
     if not vs: return None, None
     return vs[-1], calc_ema(vs,9) if len(vs)>=9 else None
 
-def calc_atr(cs, n=14):
-    if len(cs) < n: return None
-    tl = []
-    for i in range(len(cs)):
-        t = cs[i]["h"]-cs[i]["l"] if i==0 else max(cs[i]["h"]-cs[i]["l"],
-            abs(cs[i]["h"]-cs[i-1]["c"]), abs(cs[i]["l"]-cs[i-1]["c"]))
-        tl.append(t)
-    return sum(tl[-n:])/n
 
-def signal(cs):
-    if len(cs) < MIN_CANDLES: return None, {}
-    cl = [c["c"] for c in cs]
-    r  = calc_rsi(cl); e9 = calc_ema(cl,9); e21 = calc_ema(cl,21)
-    e50 = calc_ema(cl, min(50,len(cl))); mc, ms = calc_macd(cl); a = calc_atr(cs)
-    if not r or not e9 or not e21 or not a or a < 0.001: return None, {}
+def trend_1h(cs_1h):
+    """
+    Trend-Filter auf 1H Kerzen.
+    Gibt 'LONG', 'SHORT' oder None zurück.
+    """
+    if not cs_1h or len(cs_1h) < 50: return None
+    cl   = [c["c"] for c in cs_1h]
+    e21  = calc_ema(cl, 21)
+    e50  = calc_ema(cl, 50)
+    cur  = cl[-1]
+    if not e21 or not e50: return None
+
+    # Klarer Aufwärtstrend: Preis > EMA21 > EMA50
+    if cur > e21 and e21 > e50:
+        return "LONG"
+    # Klarer Abwärtstrend: Preis < EMA21 < EMA50
+    if cur < e21 and e21 < e50:
+        return "SHORT"
+    return None  # Seitwärts — kein Trade
+
+
+def signal_5m(cs_5m, erlaubte_richtung):
+    """
+    Signal auf 5-Min Kerzen — nur in erlaubte_richtung.
+    """
+    if not cs_5m or len(cs_5m) < 50: return None, {}
+    cl  = [c["c"] for c in cs_5m]
+    r   = calc_rsi(cl)
+    e9  = calc_ema(cl, 9)
+    e21 = calc_ema(cl, 21)
+    mc, ms = calc_macd(cl)
+    if not r or not e9 or not e21: return None, {}
     cur = cl[-1]; prv = cl[-2] if len(cl)>1 else cur
 
     ls = (2 if r<RSI_LOW else 0)+(2 if e9>e21 else 0)+(1 if cur>e21 else 0)+(1 if mc and ms and mc>ms else 0)+(1 if cur>prv else 0)
     ss = (2 if r>RSI_HIGH else 0)+(2 if e9<e21 else 0)+(1 if cur<e21 else 0)+(1 if mc and ms and mc<ms else 0)+(1 if cur<prv else 0)
 
     info = {"rsi": round(r,1), "ls": ls, "ss": ss}
-    if ls >= MIN_SIG and ls > ss: return "LONG", info
-    if ss >= MIN_SIG and ss > ls: return "SHORT", info
+
+    # Nur Signal geben wenn es mit dem 1H Trend übereinstimmt
+    if erlaubte_richtung == "LONG" and ls >= MIN_SIG and ls > ss:
+        return "LONG", info
+    if erlaubte_richtung == "SHORT" and ss >= MIN_SIG and ss > ls:
+        return "SHORT", info
     return None, info
 
 
@@ -212,13 +232,10 @@ def place_order(is_buy, price, reduce_only=False):
         d = r.json()
         if d.get("status") == "success":
             log("✅ Order OK!", G); return True
-        err  = d.get("error","")
         code = d.get("error_code","")
-        # Code 2064: Position existiert nicht mehr auf Nado — State zurücksetzen
         if code == 2064:
-            log(f"Position nicht auf Nado — State wird zurückgesetzt", Y)
-            return "RESET"
-        log(f"❌ {err} (Code:{code})", R); return False
+            log("Position nicht auf Nado — State zurücksetzen", Y); return "RESET"
+        log(f"❌ {d.get('error','')} (Code:{code})", R); return False
     except Exception as e:
         log(f"Order Exception: {e}", R); return False
 
@@ -248,12 +265,9 @@ def close_pos(grund, preis):
     if not pos: return
     is_buy = pos["dir"] != "LONG"
     ok = place_order(is_buy, preis, reduce_only=False)
-
-    # Position auf Nado existiert nicht mehr — State zurücksetzen
     if ok == "RESET" or (not ok and not DRY_RUN):
-        log("State wird zurückgesetzt!", Y)
+        log("State zurückgesetzt!", Y)
         pos = None; cool = COOLDOWN; save_state(); return
-
     pnl = (preis-pos["entry"])/pos["entry"]*100 if pos["dir"]=="LONG" else (pos["entry"]-preis)/pos["entry"]*100
     if pnl > 0: wins += 1
     else: loss += 1
@@ -273,16 +287,23 @@ def close_pos(grund, preis):
 def loop():
     global cool
     tick = 0
-    log(f"Bot | BTC | TP:{TAKE_PROFIT}% SL:{STOP_LOSS}% Trail:{TRAIL_PCT}% | {'DRY RUN' if DRY_RUN else 'LIVE'}", C)
+    log(f"Bot | BTC | Multi-TF | TP:{TAKE_PROFIT}% SL:{STOP_LOSS}% Trail:{TRAIL_PCT}% | {'DRY RUN' if DRY_RUN else 'LIVE'}", C)
 
     while True:
         try:
             tick += 1
-            cs = get_candles()
-            if not cs: log("Keine Kerzen", Y); time.sleep(INTERVAL); continue
 
-            preis = get_preis()
-            if not preis: log("Kein Preis", Y); time.sleep(INTERVAL); continue
+            # Preise und Kerzen holen
+            preis    = get_preis()
+            cs_5m    = get_kerzen(300,  100)   # 5-Min Kerzen
+            cs_1h    = get_kerzen(3600, 100)   # 1H Kerzen
+
+            if not preis or not cs_5m or not cs_1h:
+                log("Daten fehlen — warte...", Y)
+                time.sleep(INTERVAL); continue
+
+            # 1H Trend bestimmen
+            trend = trend_1h(cs_1h)
 
             if pos:
                 is_long = pos["dir"] == "LONG"
@@ -296,7 +317,8 @@ def loop():
                     pos["worst"] = min(pos["worst"], preis)
                     trail        = pos["worst"] * (1 + TRAIL_PCT/100)
 
-                log(f"#{pos['id']} {pos['dir']} | {fmt(pos['entry'])} → {fmt(preis)} | P&L:{fc}{pnl:+.2f}%{X} | Trail:{fmt(trail)}")
+                trend_txt = f"{G}↑{X}" if trend=="LONG" else (f"{R}↓{X}" if trend=="SHORT" else f"{Y}→{X}")
+                log(f"#{pos['id']} {pos['dir']} | {fmt(pos['entry'])}→{fmt(preis)} | P&L:{fc}{pnl:+.2f}%{X} | Trail:{fmt(trail)} | 1H:{trend_txt}")
                 save_state()
 
                 if (is_long and preis >= pos["tp"]) or (not is_long and preis <= pos["tp"]):
@@ -309,18 +331,24 @@ def loop():
             else:
                 if cool > 0:
                     cool -= 1
-                    log(f"Cooldown: {cool} | BTC {fmt(preis)}", Y)
+                    log(f"Cooldown: {cool} | BTC {fmt(preis)} | 1H Trend: {trend or 'seitwärts'}", Y)
                     time.sleep(INTERVAL); continue
 
-                sig, info = signal(cs)
+                if not trend:
+                    if tick % 3 == 0:
+                        log(f"BTC {fmt(preis)} | 1H: Seitwärts — kein Trade", Y)
+                    time.sleep(INTERVAL); continue
+
+                sig, info = signal_5m(cs_5m, trend)
                 ls = info.get("ls",0); ss = info.get("ss",0)
 
                 if sig:
-                    log(f"🎯 SIGNAL: {sig} (L:{ls}/7 S:{ss}/7 RSI:{info.get('rsi','?')})", M)
+                    log(f"🎯 SIGNAL: {sig} (1H:{trend} 5M L:{ls}/7 S:{ss}/7 RSI:{info.get('rsi','?')})", M)
                     open_pos(sig, preis)
                 else:
                     if tick % 2 == 0:
-                        log(f"BTC {fmt(preis)}  RSI:{info.get('rsi','?')}  L:{ls}/7 S:{ss}/7  → warten")
+                        trend_txt = f"{G}LONG{X}" if trend=="LONG" else f"{R}SHORT{X}"
+                        log(f"BTC {fmt(preis)} | 1H:{trend_txt} | 5M L:{ls}/7 S:{ss}/7 RSI:{info.get('rsi','?')} → warten")
 
             time.sleep(INTERVAL)
 
@@ -334,11 +362,12 @@ def loop():
 
 def main():
     print(f"\n{B}{C}  ╔══════════════════════════════════════════╗")
-    print(f"  ║      Nado.xyz — Smart Trading Bot        ║")
-    print(f"  ║   Trailing Stop + TP/SL + State Save     ║")
+    print(f"  ║    Nado.xyz — Multi-Timeframe Bot        ║")
+    print(f"  ║  1H Trend + 5Min Entry + Trailing Stop   ║")
     print(f"  ╚══════════════════════════════════════════╝{X}\n")
     print(f"  Wallet: {WALLET_ADDR[:12]}...{WALLET_ADDR[-6:]}")
     print(f"  TP:{TAKE_PROFIT}%  SL:{STOP_LOSS}%  Trail:{TRAIL_PCT}%")
+    print(f"  Trend-Filter: 1H EMA21/EMA50")
     modus = f"{Y}DRY RUN{X}" if DRY_RUN else f"{R}{B}LIVE{X}"
     print(f"  Modus: {modus}\n")
     load_state()
