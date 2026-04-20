@@ -98,9 +98,10 @@ def get_kerzen(granularity, limit):
         )
         if r.status_code != 200: return None
         cs = r.json().get("candlesticks", [])
-        return [{"o": float(c.get("open_x18",0))/1e18, "h": float(c.get("high_x18",0))/1e18,
-                 "l": float(c.get("low_x18",0))/1e18,  "c": float(c.get("close_x18",0))/1e18}
-                for c in cs] if cs else None
+           candles = [{"o": float(c.get("open_x18",0))/1e18, "h": float(c.get("high_x18",0))/1e18,
+                     "l": float(c.get("low_x18",0))/1e18,  "c": float(c.get("close_x18",0))/1e18}
+                    for c in cs]
+        return list(reversed(candles)) if candles else None
     except Exception as e:
         log(f"Kerzen Fehler ({granularity}s): {e}", Y); return None
 
